@@ -1,116 +1,74 @@
 import time
 import requests
+import pickle
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from typing import List, Dict
-import sqlite3
 
-database_name = "jwc_cookies.db"
-
-
-def init_cookies():
-    """初始化数据库和表结构"""
-    conn = sqlite3.connect(database_name)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS records (
-            SESSION TEXT,
-            SVRNAME TEXT,
-            fine_auth_token TEXT,
-            fine_remember_login TEXT
-        )
-    ''')
-    cursor.execute('DELETE FROM records')
-    conn.commit()
-    conn.close()
-
-
-def add_cookies(data: Dict[str, str]) -> None:
-    """
-    插入字典数据到数据库
-    :param data: 必须包含且仅包含 SESSION, SVRNAME, fine_auth_token, fine_remember_login 四个键的字典
-    :return: 插入行的ID
-    """
-    required_keys = {'SESSION', 'SVRNAME', 'fine_auth_token', 'fine_remember_login'}
-    if set(data.keys()) != required_keys:
-        raise ValueError("字典必须且只能包含 SESSION, SVRNAME, fine_auth_token, fine_remember_login 四个键")
-    conn = sqlite3.connect(database_name)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO records (SESSION, SVRNAME, fine_auth_token, fine_remember_login)
-        VALUES (:SESSION, :SVRNAME, :fine_auth_token, :fine_remember_login)
-    ''', data)
-    conn.commit()
-    conn.close()
+COOKIES_FILE = "cookies.pkl"
 
 
 def get_cookies() -> List[Dict[str, str]]:
-    """
-    查询数据库记录
-    :return: 返回cookies的字典列表
-    """
-    conn = sqlite3.connect(database_name)
-    conn.row_factory = sqlite3.Row  # 将结果转换为字典格式
-    cursor = conn.cursor()
-    base_query = "SELECT SESSION, SVRNAME, fine_auth_token, fine_remember_login FROM records"
-    cursor.execute(base_query)
-    results = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return results
+    """从pickle文件读取cookies"""
+    if not os.path.exists(COOKIES_FILE):
+        return []
+    with open(COOKIES_FILE, 'rb') as f:
+        return pickle.load(f)
 
 
-def delete_cookies(row_number: int) -> bool:
-    """
-    根据主键ID删除指定行数据
-    :param row_number: 要删除记录的主键ID（正整数）
-    :return: 是否成功删除（True表示有数据被删除）
-    """
-    conn = sqlite3.connect(database_name)
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM records WHERE ROWID = ?', (row_number,))
-    conn.commit()
-    conn.close()
+def save_cookies_to_file(cookies_list: List[Dict[str, str]]) -> None:
+    """保存cookies列表到pickle文件"""
+    with open(COOKIES_FILE, 'wb') as f:
+        pickle.dump(cookies_list, f)
 
 
-def load_cookies(username: str, password: str, number: int) -> None:
-    for i in range(number):
-        Login_by_selenium(username, password, save_cookies=True)
-        print(f"{i}号cookie保存完成")
+def add_cookies(new_cookies: Dict[str, str]) -> None:
+    """添加新的cookie字典到存储"""
+    current_cookies = get_cookies()
+    current_cookies.append(new_cookies)
+    save_cookies_to_file(current_cookies)
 
 
 def clear_invalid_cookies() -> int:
     cookies_list = get_cookies()
-    remove_list = []
+    valid_cookies = []
+    removed_count = 0
+    
     for index, cookies in enumerate(cookies_list):
-        if not LoginCheck(Login_by_cookies(cookies)):
-            remove_list.insert(0, index)
+        if login_check(login_by_cookies(cookies)):
+            valid_cookies.append(cookies)
+        else:
             print(f"{index}号cookie失效")
-    for index in remove_list:
-        delete_cookies(index + 1)
-        print(f"{index}号cookie已清除")
-    return len(remove_list)
+            removed_count += 1
+            
+    save_cookies_to_file(valid_cookies)
+    return removed_count
 
 
-def Login_by_selenium(username: str, password: str, save_cookies: bool = False) -> requests.Session | None:
-    """
-    USTC统一身份认证自动登录
-    :param username: 用户名
-    :param password: 密码
-    :param save_cookies: 是否保存cookie以便下次快捷登录
-    :return: 可用于后续操作的session
-    """
+def load_cookies(username: str, password: str, number: int) -> None:
+    """批量登录并保存cookies"""
+    for i in range(number):
+        login_by_selenium(username, password, save_cookies=True)
+        print(f"{i}号cookie保存完成")
+
+
+def login_by_selenium(username: str, password: str, save_cookies: bool = False) -> requests.Session | None:
     options = Options()
-    options.add_argument(f"--user-data-dir=D:/Code/ChromeCache/default")
-    # options.add_argument('--headless')
-    # options.add_argument('--disable-gpu')
 
+    # options.add_argument(f"--user-data-dir=D:/Code/ChromeCache/default")
+    
     name_path = "#nameInput"
     password_path = "#normalLoginForm > div.login-normal-item.passwordInput.ant-row > nz-input-group > input"
     login_path = "#submitBtn"
-    driver = webdriver.Chrome(options=options)
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
     driver.get("https://id.ustc.edu.cn/cas/login?service=https:%2F%2Fjw.ustc.edu.cn%2Fucas-sso%2Flogin")
-    driver.implicitly_wait(60)
+    driver.implicitly_wait(120)
 
     # 输入用户名密码并点击登录
     password_input = driver.find_element(By.CSS_SELECTOR, password_path)
@@ -132,49 +90,42 @@ def Login_by_selenium(username: str, password: str, save_cookies: bool = False) 
         else:
             time.sleep(1)
 
-    # 将获取的cookie和header加入session中，然后返回
+
+    # 将获取的cookie和header加入session中
     result_session = requests.Session()
     try:
         cookies = driver.get_cookies()
         user_agent = driver.execute_script("return navigator.userAgent;")
         result_session.headers.update({"User-Agent": user_agent})
+        
+        cookie_dict = {}
         for cookie in cookies:
-            result_session.cookies.set(
-                name=cookie["name"],
-                value=cookie["value"],
-                domain=cookie["domain"].lstrip("."),  # 移除域名前的点
-                path=cookie["path"],
-                secure=cookie.get("secure", False)
-            )
+            result_session.cookies.set(name=cookie["name"], value=cookie["value"], domain=cookie["domain"].lstrip("."), path=cookie["path"], secure=cookie.get("secure", False))
+            cookie_dict[cookie["name"]] = cookie["value"]
+            
         if save_cookies:
-            insert_data = {}
-            for cookie in cookies:
-                insert_data[cookie["name"]] = cookie["value"]
-            add_cookies(insert_data)
+            # 保存所有cookie的键值对
+            add_cookies(cookie_dict)
+            
     finally:
         driver.quit()
         return result_session
 
 
-def Login_by_cookies(cookies: Dict[str, str]) -> requests.Session:
+def login_by_cookies(cookies: Dict[str, str]) -> requests.Session:
     result_session = requests.Session()
-    for key in cookies.keys():
-        result_session.cookies.set(key, cookies.get(key))
-    User_Agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"
-    result_session.headers.update({"User-Agent": User_Agent})
+    for key, value in cookies.items():
+        result_session.cookies.set(key, value)
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"
+    result_session.headers.update({"User-Agent": user_agent})
     return result_session
 
 
-def LoginCheck(session: requests.Session) -> bool:
-    """
-    检测是否登录成功
-    :param session: 待检测的session
-    :return: 检测结果
-    """
+def login_check(session: requests.Session) -> bool:
     response = session.get("https://jw.ustc.edu.cn/home", allow_redirects=False)
     if response.status_code == 200:
         return True
-    elif requests.status_codes == 302:
+    elif response.status_code == 302:
         return False
     else:
         return False

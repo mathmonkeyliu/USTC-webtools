@@ -4,9 +4,7 @@ import requests
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor
-from .Login import LoginCheck
-from .Error import *
-
+from .login import login_check, login_by_cookies, get_cookies, clear_invalid_cookies, login_by_selenium
 
 def get_time():
     return datetime.datetime.now().strftime('%H:%M:%S.%f')
@@ -26,7 +24,7 @@ class enforce_min_duration:
             time.sleep(self.min_duration - elapsed)
 
 
-class RobClass(object):
+class CourseSelector:
     _course_select_url = "https://jw.ustc.edu.cn/for-std/course-select"
     _open_turn_url = "https://jw.ustc.edu.cn/ws/for-std/course-select/open-turns"
     _add_class_url = "https://jw.ustc.edu.cn/ws/for-std/course-select/add-request"
@@ -35,303 +33,209 @@ class RobClass(object):
     _std_count_url = "https://jw.ustc.edu.cn/ws/for-std/course-select/std-count"
     _addable_classes_url = "https://jw.ustc.edu.cn/ws/for-std/course-select/addable-lessons"
 
-    def __init__(self, session: requests.sessions.Session):
+    def __init__(self, session: requests.Session):
         self.session = session
-        if not LoginCheck(self.session):
-            raise InvalidSessionError()
+        if not login_check(self.session):
+            raise Exception("Session invalid")
+        
+        # Initialize selection info (Student ID and Turn ID)
         next_url = self.session.get(url=self._course_select_url, allow_redirects=False).next.url
-        self.studentAssoc: int = int(re.search(r'\d+', next_url).group())
-        response = self.session.post(url=self._open_turn_url,
-                                     data={'bizTypeId': 2, 'studentId': self.studentAssoc})
-        temp_dict = json.loads(response.text)
-        self.TurnAssoc: int = temp_dict[0].get('id')
+        self.student_assoc = int(re.search(r'\d+', next_url).group())
+        
+        response = self.session.post(url=self._open_turn_url, 
+                                   data={'bizTypeId': 2, 'studentId': self.student_assoc})
+        # Check if response is valid JSON array
+        try:
+            data = json.loads(response.text)
+            if data and isinstance(data, list):
+                self.turn_assoc = data[0].get('id')
+            else:
+                raise Exception(f"Failed to get turn info: {response.text}")
+        except json.JSONDecodeError:
+            raise Exception(f"Failed to parse turn response: {response.text}")
 
-    def get_class_info(self, class_code: list[str], value: str = "id") -> list:
-        temp_class_code = class_code.copy()
-        l = len(temp_class_code)
-        return_list = [None] * l
+    def get_class_info(self, class_codes: list[str], value: str = "id") -> list:
+        temp_codes = class_codes.copy()
+        remaining = len(temp_codes)
+        result = [None] * remaining
+        
         data = {
-            'turnId': self.TurnAssoc,
-            'studentId': self.studentAssoc
+            'turnId': self.turn_assoc,
+            'studentId': self.student_assoc
         }
         res = self.session.post(self._addable_classes_url, data=data)
-        classes_list: list[dict] = json.loads(res.text)
+        try:
+            classes_list = json.loads(res.text)
+        except json.JSONDecodeError:
+            print(f"Error parsing class list: {res.text}")
+            return result
+
         for class_info in classes_list:
-            for index, code in enumerate(temp_class_code):
+            for idx, code in enumerate(temp_codes):
                 if class_info.get('code') == code:
-                    return_list[index] = class_info.get(value)
-                    l -= 1
+                    result[idx] = class_info.get(value)
+                    remaining -= 1
                     break
-            if l == 0:
+            if remaining == 0:
                 break
-        return return_list
+        return result
 
-    def add_class(self, lessonAssoc: str | int) -> bool:
+    def add_class(self, lesson_assoc: str | int) -> bool:
         try:
-            ticket = self.session.post(url=self._add_class_url,
-                                       data={'studentAssoc': self.studentAssoc, 'lessonAssoc': lessonAssoc,
-                                             'courseSelectTurnAssoc': self.TurnAssoc,
-                                             'scheduleGroupAssoc': '', 'virtualCost': '0'}).text
-            return json.loads(self.session.post(url=self._confirm_url,
-                                                data={'studentId': self.studentAssoc, 'requestId': ticket}).text).get(
-                'success')
-        except AttributeError:
+            data = {
+                'studentAssoc': self.student_assoc, 
+                'lessonAssoc': lesson_assoc, 
+                'courseSelectTurnAssoc': self.turn_assoc, 
+                'scheduleGroupAssoc': '', 
+                'virtualCost': '0'
+            }
+            ticket = self.session.post(url=self._add_class_url, data=data).text
+            res = self.session.post(url=self._confirm_url, data={'studentId': self.student_assoc, 'requestId': ticket})
+            return json.loads(res.text).get('success')
+        except (AttributeError, json.JSONDecodeError):
             return False
 
-    def add_class_quick(self, lessonAssoc: str | int) -> None:
-        self.session.post(url=self._add_class_url,
-                          data={'studentAssoc': self.studentAssoc, 'lessonAssoc': lessonAssoc,
-                                'courseSelectTurnAssoc': self.TurnAssoc,
-                                'scheduleGroupAssoc': '', 'virtualCost': '0'})
 
-    def drop_class(self, lessonAssoc: str | int) -> bool:
+    def drop_class(self, lesson_assoc: str | int) -> bool:
         try:
-            ticket = self.session.post(url=self._drop_class_url,
-                                       data={'studentAssoc': self.studentAssoc, 'lessonAssoc': lessonAssoc,
-                                             'courseSelectTurnAssoc': self.TurnAssoc}).text
-            return json.loads(
-                self.session.post(url=self._confirm_url,
-                                  data={'studentId': self.studentAssoc, 'requestId': ticket}).text).get('success')
-        except AttributeError:
+            data = {
+                'studentAssoc': self.student_assoc, 
+                'lessonAssoc': lesson_assoc, 
+                'courseSelectTurnAssoc': self.turn_assoc
+            }
+            ticket = self.session.post(url=self._drop_class_url, data=data).text
+            res = self.session.post(url=self._confirm_url, 
+                                  data={'studentId': self.student_assoc, 'requestId': ticket}).text
+            return json.loads(res).get('success')
+        except (AttributeError, json.JSONDecodeError):
             return False
 
-    def drop_class_quick(self, lessonAssoc: str | int) -> None:
-        self.session.post(url=self._drop_class_url,
-                          data={'studentAssoc': self.studentAssoc, 'lessonAssoc': lessonAssoc,
-                                'courseSelectTurnAssoc': self.TurnAssoc,
-                                'scheduleGroupAssoc': '', 'virtualCost': '0'})
 
-    def add_class_on_time(self, start_time: str, lessonAssoc_list: list[str]) -> None:
-        with ThreadPoolExecutor(max_workers=len(lessonAssoc_list)) as executor:
-            while True:
-                if get_time() >= start_time:
-                    t1 = time.time()
-                    executor.map(self.add_class_quick, lessonAssoc_list)
-                    t2 = time.time()
-                    print(f"抢课完成，历时{t2 - t1}秒")
-                    break
+    def select_courses(self, course_codes: list[str]) -> None:
+        """
+        批量选课便捷方法
+        :param course_codes: 课程代码列表，如 ['BIOL5121P.02', '008704.02']
+        """
+        if not course_codes:
+            return
 
-    def drop_class_on_time(self, start_time: str, lessonAssoc_list: list[str]) -> None:
-        with ThreadPoolExecutor(max_workers=len(lessonAssoc_list)) as executor:
-            while True:
-                if get_time() >= start_time:
-                    t1 = time.time()
-                    executor.map(self.drop_class_quick, lessonAssoc_list)
-                    t2 = time.time()
-                    print(f"退课完成，历时{t2 - t1}秒")
-                    break
-
-    def check_persistently(self, lesson_code_list: list[str], sleep_time: int | float) -> None:
-        error_count = 0
-        data_list = []
-        lessonAssoc_list = self.get_class_info(lesson_code_list, 'id')
-        for index, lesson in enumerate(lessonAssoc_list):
-            lessonAssoc_list[index] = str(lesson)
-            data_list.append(("lessonIds[]", str(lesson)))
-        while True:
-            try:
-                class_info = self.get_class_info(lesson_code_list, 'limitCount')
-                res = self.session.post(self._std_count_url, data=data_list)
-                res_dict: dict = json.loads(res.text)
-                for index, temp_lessonAssoc in enumerate(lessonAssoc_list):
-                    if res_dict[temp_lessonAssoc] < class_info[index]:
-                        if self.add_class(temp_lessonAssoc):
-                            print(f"{get_time()} {lesson_code_list[index]} 选课成功")
-                            data_list.remove(("lessonIds[]", temp_lessonAssoc))
-                        else:
-                            print(f"{get_time()} {lesson_code_list[index]} 选课失败")
-                if len(data_list) == 0:
-                    break
+        print(f"正在获取课程ID: {course_codes}")
+        course_ids = self.get_class_info(course_codes, 'id')
+        
+        for i, code in enumerate(course_codes):
+            course_id = course_ids[i]
+            if course_id:
+                print(f"正在尝试选择 {code} (ID: {course_id})...")
+                if self.add_class(course_id):
+                    print(f"成功选择 {code}")
                 else:
-                    print(f"{get_time()} {lesson_code_list} 人数已满")
-                    time.sleep(sleep_time)
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                error_count += 1
-                print(f"{get_time()} Error {e}")
-                if error_count > 10:
-                    break
-                time.sleep(sleep_time)
+                    print(f"选择 {code} 失败")
+            else:
+                print(f"未找到课程 {code} 的信息")
 
 
-def multi_session_solution(start_time: str, stop_time: str,
-                           min_interval_time: int | float,
-                           drop_lesson_code_list: list[str], add_lesson_code_list: list[str],
-                           login_method='selenium', **kwargs) -> None:
-    """
-    基于多浏览器的抢课方案
-    :param start_time: 开始时间（建议比实际开始时间提前）格式为??（时）:??（分）:??（秒）.??????
-    :param stop_time: 结束时间（建议比实际结束时间滞后）格式为??（时）:??（分）:??（秒）.??????
-    :param min_interval_time: 每个浏览器的最少抢课时间
-    :param drop_lesson_code_list: 需退课的课程编号列表
-    :param add_lesson_code_list: 需添加的课程编号列表
-    :param login_method: 登录方法（可以使用Login库中的LoginBy类）
-    """
 
-    # 进行session_number个浏览器的登录
-    RobotList = []
+def multi_session_solution(start_time: str, stop_time: str, 
+                         min_interval: int | float, 
+                         drop_codes: list[str], add_codes: list[str], 
+                         login_method='selenium', **kwargs) -> None:
+    """基于多浏览器的抢课方案"""
+    selectors = [] 
+    
     if login_method == 'cookies':
-        from .Login import Login_by_cookies, get_cookies, clear_invalid_cookies
         clear_invalid_cookies()
         cookies_list = get_cookies()
-        for index in range(len(get_cookies())):
-            RobotList.append(RobClass(Login_by_cookies(cookies_list[index])))
-            print(f"{index}号浏览器登录完成")
+        for idx, cookies in enumerate(cookies_list):
+            try:
+                sess = login_by_cookies(cookies)
+                selector = CourseSelector(sess)
+                selectors.append({'selector': selector, 'id': idx})
+                print(f"{idx}号浏览器登录完成")
+            except Exception as e:
+                print(f"{idx}号浏览器初始化失败: {e}")
+                
     elif login_method == 'selenium':
         username = kwargs.get("username")
         password = kwargs.get("password")
-        session_number = kwargs.get("session_number")
-        for index in range(session_number):
-            from .Login import Login_by_selenium
-            RobotList.append(RobClass(Login_by_selenium(username, password)))
-            print(f"{index}号浏览器登录完成")
-        # 检查浏览器的状态
-        error_list = []
-        for index in range(session_number):
-            session_status = LoginCheck(RobotList[index].session)
-            print(f"{index}号浏览器状态：\t{session_status}")
-            if not session_status:
-                # 将失效的session的索引倒序存入error_list中
-                error_list.insert(0, index)
-        # 去除失效的session
-        for i in error_list:
-            RobotList.pop(i)
+        count = kwargs.get("session_number")
+        for i in range(count):
+            try:
+                sess = login_by_selenium(username, password)
+                selector = CourseSelector(sess)
+                selectors.append({'selector': selector, 'id': i})
+                print(f"{i}号浏览器登录完成")
+            except Exception as e:
+                print(f"{i}号浏览器登录/初始化失败: {e}")
     else:
         raise ValueError("method is not supported")
 
-    # 获取课程对应的lessonAssoc
-    drop_lesson_code_list_copy = drop_lesson_code_list.copy()
-    add_lesson_code_list_copy = add_lesson_code_list.copy()
-    drop_lessonAssoc_list = RobotList[0].get_class_info(drop_lesson_code_list_copy, 'id')
-    add_lessonAssoc_list = RobotList[0].get_class_info(add_lesson_code_list_copy, 'id')
+    if not selectors:
+        print("无可用session")
+        return
 
-    # 开始抢课
+    # Use first selector to resolve IDs
+    main_selector = selectors[0]['selector']
+    drop_assocs = main_selector.get_class_info(drop_codes, 'id')
+    add_assocs = main_selector.get_class_info(add_codes, 'id')
+    
+    drop_codes_copy = drop_codes.copy()
+    add_codes_copy = add_codes.copy()
+
     input("按回车键开始")
-    executor = ThreadPoolExecutor(max_workers=len(drop_lesson_code_list) + len(add_lesson_code_list))
+    executor = ThreadPoolExecutor(max_workers=len(drop_codes) + len(add_codes))
 
-    # 待时间到达start_time后启动
-    while True:
-        if get_time() >= start_time:
-            break
+    while get_time() < start_time:
+        pass
 
-    # 将多个session循环开始抢课
     while get_time() < stop_time:
-        remove_list = []
-        if len(RobotList) == 0:
-            executor.shutdown()
-            return None
-
-        for index, RobRobot in enumerate(RobotList):
-            print(get_time(), f'{index}号浏览器，启动！')
+        if not selectors:
+            break
+            
+        dead_selectors = []
+        for item in selectors:
+            selector = item['selector']
+            browser_id = item['id']
+            print(get_time(), f"{browser_id}号浏览器，启动！")
             try:
-                with enforce_min_duration(min_interval_time):
-                    drop_results = executor.map(RobRobot.drop_class, drop_lessonAssoc_list)
-                    add_results = executor.map(RobRobot.add_class, add_lessonAssoc_list)
-                    drop_remove_list = []
-                    add_remove_list = []
-                    for index2, result in enumerate(drop_results):
-                        if result:
-                            print(f"{get_time()} {drop_lesson_code_list_copy[index2]} 退课成功")
-                            drop_remove_list.insert(0, index2)
-                    for index2, result in enumerate(add_results):
-                        if result:
-                            print(f"{get_time()} {add_lesson_code_list_copy[index2]} 抢课成功")
-                            add_remove_list.insert(0, index2)
-                    for i in drop_remove_list:
-                        drop_lessonAssoc_list.pop(i)
-                        drop_lesson_code_list_copy.pop(i)
-                    for i in add_remove_list:
-                        add_lessonAssoc_list.pop(i)
-                        add_lesson_code_list_copy.pop(i)
+                with enforce_min_duration(min_interval):
+                    drop_res = list(executor.map(selector.drop_class, drop_assocs))
+                    add_res = list(executor.map(selector.add_class, add_assocs))
+                    
+                    # Process results
+                    to_remove_drop = []
+                    to_remove_add = []
+                    
+                    for i, success in enumerate(drop_res):
+                        if success:
+                            print(f"{get_time()} {drop_codes_copy[i]} 退课成功")
+                            to_remove_drop.insert(0, i)
+                            
+                    for i, success in enumerate(add_res):
+                        if success:
+                            print(f"{get_time()} {add_codes_copy[i]} 抢课成功")
+                            to_remove_add.insert(0, i)
+
+                    # Update lists
+                    for i in to_remove_drop:
+                        drop_assocs.pop(i)
+                        drop_codes_copy.pop(i)
+                    for i in to_remove_add:
+                        add_assocs.pop(i)
+                        add_codes_copy.pop(i)
+
             except requests.exceptions.ConnectionError:
-                remove_list.insert(0, index)
-                print(get_time(), f'{index}号浏览器，超载！！！')
-                print(get_time(), f'{index}号浏览器，关闭！')
+                dead_selectors.append(item)
+                print(get_time(), f"{browser_id}号浏览器，超载/关闭！")
             except Exception as e:
-                print(f"{index}号浏览器异常错误{e}")
-                print(get_time(), f'{index}号浏览器，关闭！')
-            else:
-                print(get_time(), f'{index}号浏览器，关闭！')
-            if len(add_lesson_code_list_copy) == 0 and len(drop_lesson_code_list_copy) == 0:
+                print(f"{browser_id}号浏览器异常: {e}")
+                dead_selectors.append(item)
+            
+            if not add_codes_copy and not drop_codes_copy:
                 executor.shutdown()
-                return None
-        for index in remove_list:
-            RobotList.pop(index)
+                return
+
+        for r in dead_selectors:
+            if r in selectors:
+                selectors.remove(r)
 
     executor.shutdown()
-    return None
-
-
-def multi_session_solution_quick(start_time: str, stop_time: str,
-                           min_interval_time: int | float,
-                           drop_lesson_code_list: list[str], add_lesson_code_list: list[str],
-                           login_method='selenium', **kwargs) -> None:
-    """
-    基于多浏览器的抢课方案（快速版）
-    :param start_time: 开始时间（建议比实际开始时间提前）格式为??（时）:??（分）:??（秒）.??????
-    :param stop_time: 结束时间（建议比实际结束时间滞后）格式为??（时）:??（分）:??（秒）.??????
-    :param min_interval_time: 每个浏览器的最少抢课时间
-    :param drop_lesson_code_list: 需退课的课程编号列表
-    :param add_lesson_code_list: 需添加的课程编号列表
-    :param login_method: 登录方法（可以使用Login库中的LoginBy类）
-    """
-
-    # 进行session_number个浏览器的登录
-    RobotList = []
-    if login_method == 'cookies':
-        from .Login import Login_by_cookies, get_cookies, clear_invalid_cookies
-        clear_invalid_cookies()
-        cookies_list = get_cookies()
-        for index in range(len(get_cookies())):
-            RobotList.append(RobClass(Login_by_cookies(cookies_list[index])))
-            print(f"{index}号浏览器登录完成")
-    elif login_method == 'selenium':
-        username = kwargs.get("username")
-        password = kwargs.get("password")
-        session_number = kwargs.get("session_number")
-        for index in range(session_number):
-            from .Login import Login_by_selenium
-            RobotList.append(RobClass(Login_by_selenium(username, password)))
-            print(f"{index}号浏览器登录完成")
-        # 检查浏览器的状态
-        error_list = []
-        for index in range(session_number):
-            session_status = LoginCheck(RobotList[index].session)
-            print(f"{index}号浏览器状态：\t{session_status}")
-            if not session_status:
-                # 将失效的session的索引倒序存入error_list中
-                error_list.insert(0, index)
-        # 去除失效的session
-        for i in error_list:
-            RobotList.pop(i)
-    else:
-        raise ValueError("method is not supported")
-
-    # 获取课程对应的lessonAssoc
-    drop_lessonAssoc_list = RobotList[0].get_class_info(drop_lesson_code_list, 'id')
-    add_lessonAssoc_list = RobotList[0].get_class_info(add_lesson_code_list, 'id')
-
-    input("按回车键开始")
-    executor = ThreadPoolExecutor()
-    while True:
-        if get_time() >= start_time:
-            break
-
-    try:
-        while True:
-            for index, RobRobot in enumerate(RobotList):
-                with enforce_min_duration(min_interval_time):
-                    print(get_time(), f'{index}号浏览器，启动！')
-                    executor.map(RobRobot.drop_class_quick, drop_lessonAssoc_list)
-                    executor.map(RobRobot.add_class_quick, add_lessonAssoc_list)
-                    print(get_time(), f'{index}号浏览器，关闭！')
-
-    except KeyboardInterrupt:
-        executor.shutdown()
-        return None
-
-    except Exception as e:
-        print(e)
-        executor.shutdown()
-        return None

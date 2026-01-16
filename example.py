@@ -1,15 +1,27 @@
 from jwc import *
 from setting import *
 
-if __name__ == '__main__':
-    add_list = ['BIOL5121P.02', '008704.02', 'BIO2001.04']
-    drop_list = []
-    # init_cookies() # 清空数据库中的cookie数据
-    # load_cookies(username, password, 10)
+def main():
+    # 示例：使用单个session一键选课
+    
+    clear_invalid_cookies()
+    
+    # 1. 获取Cookies并登录
     cookies_list = get_cookies()
-    # Robot = RobClass(Login_by_cookies(cookies_list[0]))
-    # add = Robot.get_class_info(add_list)
-    # print(Robot.add_class(add[0]))
-    # print(add)
-    multi_session_solution("17:59:58", "18:00:03", 0.1,
-                           drop_list, add_list, LoginBy.cookies)
+
+    if not cookies_list:
+        login_by_selenium(username, password, save_cookies=True)
+        cookies_list = get_cookies()
+        
+    session = login_by_cookies(cookies_list[0])
+
+    try:
+        # 2. 初始化并一键选课
+        selector = CourseSelector(session)
+        selector.select_courses(['HS1648.03'])
+
+    except Exception as e:
+        print(f"发生错误: {e}")
+
+if __name__ == '__main__':
+    main()
