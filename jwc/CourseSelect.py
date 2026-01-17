@@ -5,6 +5,7 @@ import time
 import json
 from concurrent.futures import ThreadPoolExecutor
 from .login import login_check, login_by_cookies, get_cookies, clear_invalid_cookies, login_by_selenium, load_cookies
+from urllib.parse import urlencode, urljoin
 
 def get_time():
     return datetime.datetime.now().strftime('%H:%M:%S.%f')
@@ -117,8 +118,7 @@ class CourseSelector:
                 'courseSelectTurnAssoc': self.turn_assoc
             }
             ticket = self.session.post(url=self._drop_class_url, data=data).text
-            res = self.session.post(url=self._confirm_url, 
-                                  data={'studentId': self.student_assoc, 'requestId': ticket}).text
+            res = self.session.post(url=self._confirm_url, data={'studentId': self.student_assoc, 'requestId': ticket}).text
             
             # weird thing in 2026.1.17
             if res.status_code == 200 and res.text == "null":
@@ -160,11 +160,67 @@ class CourseSelector:
             time.sleep(0.5)
 
 
-    def change_course(self, prev_course: list[str], new_course: list[str]) -> None:
-        
-        data = {"saveCmds":[{"oldLessonAssoc":173756,"newLessonAssoc":173749,"studentAssoc":488539,"semesterAssoc":421,"bizTypeAssoc":2,"applyReason":"sgsdfg","applyTypeAssoc":5,"scheduleGroupAssoc":"null"}],"studentAssoc":488539,"semesterAssoc":421,"bizTypeAssoc":2,"applyTypeAssoc":5,"courseSelectTurnAssoc":1182}
+    def change_course(self, prev_course: list[str], new_course: list[str], reason: str = "换课") -> None:
+        prev_id = self.get_class_info(prev_course, 'id')
+        new_id = self.get_class_info(new_course, 'id')
 
-        res = self.session.post(url=self._change_class_url, data=data)
+        self.semester_assoc = 421
+
+        for prev_id, new_id in zip(prev_id, new_id):
+            if prev_id is None or new_id is None:
+                continue
+            
+            data = {
+                "saveCmds": [{
+                    "oldLessonAssoc": prev_id,
+                    "newLessonAssoc": new_id,
+                    "studentAssoc": self.student_assoc,
+                    "semesterAssoc": self.semester_assoc,
+                    "bizTypeAssoc": 2,
+                    "applyReason": reason,
+                    "applyTypeAssoc": 5,
+                    "scheduleGroupAssoc": None
+                }],
+                "studentAssoc": self.student_assoc,
+                "semesterAssoc": self.semester_assoc,
+                "bizTypeAssoc": 2,
+                "applyTypeAssoc": 5,
+                "courseSelectTurnAssoc": self.turn_assoc
+            }
+
+            params = {
+                "lessonAssoc": new_id,
+                "oldLessonId": prev_id,
+                "turnId": self.turn_assoc,
+                "bizTypeAssoc": 2,
+                "semesterAssoc": self.semester_assoc,
+                "studentAssoc": self.student_assoc,
+                "applyTypeAssoc": 5,
+                "REDIRECT_URL": f"/for-std/course-adjustment-apply/change-class-apply/apply?turnId={self.turn_assoc}&lessonId={prev_id}&studentId={self.student_assoc}&semesterId={self.semester_assoc}&bizTypeId=2&REDIRECT_URL=null"
+            }
+
+            headers = {
+                "referer": urljoin(self._change_class_url, "?" + urlencode(params))
+            }
+
+            try:
+                res = self.session.post(url=self._change_class_url, json=data, headers=headers)
+
+                if res.status_code != 200:
+                    print(f"{prev_course} -> {new_course} 出现异常: {res.status_code}")
+                    continue
+
+                res = json.loads(res.text)
+
+                if res.get('verifySuccess'):
+                    print(f"{prev_course} -> {new_course} 换课成功")
+
+                else:
+                    print(f"{prev_course} -> {new_course} 换课失败，原因: {res.get('errors').get('allErrors')[0].get('text')}")
+
+            except Exception as e:
+                print(f"{prev_course} -> {new_course} 出现异常: {e}")
+                continue
 
         return
 
