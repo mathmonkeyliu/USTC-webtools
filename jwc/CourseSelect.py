@@ -44,8 +44,7 @@ class CourseSelector:
         next_url = self.session.get(url=self._course_select_url, allow_redirects=False).next.url
         self.student_assoc = int(re.search(r'\d+', next_url).group())
         
-        response = self.session.post(url=self._open_turn_url, 
-                                   data={'bizTypeId': 2, 'studentId': self.student_assoc})
+        response = self.session.post(url=self._open_turn_url, data={'bizTypeId': 2, 'studentId': self.student_assoc})
         # Check if response is valid JSON array
         try:
             data = json.loads(response.text)
@@ -55,6 +54,15 @@ class CourseSelector:
                 raise Exception(f"Failed to get turn info: {response.text}")
         except json.JSONDecodeError:
             raise Exception(f"Failed to parse turn response: {response.text}")
+
+        # get semester assoc
+        select_url = f"https://jw.ustc.edu.cn/for-std/course-select/{self.student_assoc}/turn/{self.turn_assoc}/select"
+        response = self.session.get(url=select_url)
+
+        try:
+            self.semester_assoc = int(re.findall(r'semesterId: (\d*),', response.text)[0])
+        except Exception as e:
+            raise Exception(f"Failed to get semester info: {e}")
 
     def get_class_info(self, class_codes: list[str], value: str = "id") -> list:
         temp_codes = class_codes.copy()
