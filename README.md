@@ -24,6 +24,13 @@ options.binary_location = r"D:\path\to\your\chrome.exe"
 
 ## 使用
 
+首先在根目录下创建一个名为`setting.py`的文件，在里面写入你的用户名和密码：
+
+```python
+username = "username"
+password = "password"
+```
+
 ### 抢课
 
 使用抢课/选课功能，请参考[example_select_courses.py](example_select_courses.py)。
