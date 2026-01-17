@@ -49,9 +49,9 @@ def clear_invalid_cookies() -> int:
     return removed_count
 
 
-def load_cookies(username: str, password: str, number: int) -> None:
+def load_cookies(username: str, password: str, num: int) -> None:
     """批量登录并保存cookies"""
-    for i in range(number):
+    for i in range(num):
         login_by_selenium(username, password, save_cookies=True)
         print(f"{i}号cookie保存完成")
 

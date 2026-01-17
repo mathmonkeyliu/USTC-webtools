@@ -10,15 +10,15 @@ def main():
     cookies_list = get_cookies()
 
     if not cookies_list:
-        login_by_selenium(username, password, save_cookies=True)
+        load_cookies(username, password, num=1)
         cookies_list = get_cookies()
         
     session = login_by_cookies(cookies_list[0])
 
     try:
-        # 2. 初始化并一键选课
         selector = CourseSelector(session)
-        selector.select_courses(['HS1648.03'])
+        courses = ["BIO3501.01", "AI1001A.02", "PE00139.01", "022118.01", "008185.02", "008144.01", "022062.07", "AI1001A.02", "008187.02"]
+        selector.select_courses(courses)
 
     except Exception as e:
         print(f"发生错误: {e}")
