@@ -38,3 +38,7 @@ password = "password"
 ### 换课
 
 使用换课功能，请参考[example_change_courses.py](example_change_courses.py)。
+
+### 等待课程
+
+有时我们需要等待有人退课再去抢，可以使用`wait_courses`方法，请参考

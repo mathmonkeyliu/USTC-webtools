@@ -65,6 +65,12 @@ class CourseSelector:
             raise Exception(f"Failed to get semester info: {e}")
 
     def get_class_info(self, class_codes: list[str], value: str = "id") -> list:
+        """
+        获取课程信息
+        :param class_codes: 课程代码列表，如 ['BIOL5121P.02', '008704.02']
+        :param value: 需要获取的键，如 'id' 或 'limitCount'
+        :return: 键对应的值的列表，如 [123456, 123457]
+        """
         temp_codes = class_codes.copy()
         remaining = len(temp_codes)
         result = [None] * remaining
@@ -84,10 +90,6 @@ class CourseSelector:
             for idx, code in enumerate(temp_codes):
                 if class_info.get('code') == code:
                     result[idx] = class_info.get(value)
-                    remaining -= 1
-                    break
-            if remaining == 0:
-                break
         return result
 
     def add_class(self, lesson_assoc: str | int) -> tuple[int, str]:
@@ -104,7 +106,7 @@ class CourseSelector:
 
             # weird thing in 2026.1.17
             if res.status_code == 200 and res.text == "null":
-                return 0, None
+                return 1, "Success submit, but result unknown"
             
             response_data = json.loads(res.text)
             if response_data.get('success'):
@@ -130,7 +132,7 @@ class CourseSelector:
             
             # weird thing in 2026.1.17
             if res.status_code == 200 and res.text == "null":
-                return 0, None
+                return 1, "Success submit, but result unknown"
             
             response_data = json.loads(res)
             if response_data.get('success'):
@@ -232,9 +234,40 @@ class CourseSelector:
 
         return
 
+    def wait_courses(self, course_codes: list[str], time_interval: int = 5) -> None:
+        course_ids = self.get_class_info(course_codes, 'id')
+        limit_counts = self.get_class_info(course_codes, 'limitCount')
+
+        for index, course_id in enumerate(course_ids):
+            if course_id is None:
+                print(f"课程 {course_codes[index]} 不存在")
+                course_codes.pop(index)
+                course_ids.pop(index)
+                limit_counts.pop(index)
+                continue
+
+        data = {'lessonIds[]': course_ids}
+        while True:
+            response = self.session.post(url=self._std_count_url, data=data)
+            response_data = json.loads(response.text)
+            try:
+                for index, course_id in enumerate(course_ids):
+                    if response_data.get(str(course_id)) < limit_counts[index]:
+                        _, msg = self.add_class(course_id)
+                        print(f"课程 {course_codes[index]} 出现空位，完成抢课：{msg}")
+                        course_codes.pop(index)
+                        course_ids.pop(index)
+                        limit_counts.pop(index)
+                print(f"剩余课程：{course_codes}")
+                
+            except Exception as e:
+                print(f"出现异常: {e}")
+
+            time.sleep(time_interval)
 
 
-def multi_session_solution(start_time: str, stop_time: str, min_interval: int | float, drop_codes: list[str], add_codes: list[str], login_method='selenium', session_number=1, username=None, password=None) -> None:
+
+def multi_session_solution(start_time: str, stop_time: str, min_interval: int | float, drop_codes: list[str], add_codes: list[str], session_number=1, username=None, password=None) -> None:
     """
     基于多浏览器的抢课方案
     :param start_time: 开始时间
@@ -242,40 +275,29 @@ def multi_session_solution(start_time: str, stop_time: str, min_interval: int | 
     :param min_interval: 最小间隔时间
     :param drop_codes: 退课课程代码列表
     :param add_codes: 抢课课程代码列表
-    :param login_method: 登录方式
     :param session_number: 浏览器数量
     :param username: 用户名
     :param password: 密码
     """
-    selectors = [] 
+    selectors = []
     
-    if login_method == 'cookies':
-        clear_invalid_cookies()
-        cookies_list = get_cookies()
-        for idx, cookies in enumerate(cookies_list):
-            try:
-                sess = login_by_cookies(cookies)
-                selector = CourseSelector(sess)
-                selectors.append({'selector': selector, 'id': idx})
-                print(f"{idx}号浏览器登录完成")
-            except Exception as e:
-                print(f"{idx}号浏览器初始化失败: {e}")
-                
-    elif login_method == 'selenium':
-        for i in range(session_number):
-            try:
-                sess = login_by_selenium(username, password)
-                selector = CourseSelector(sess)
-                selectors.append({'selector': selector, 'id': i})
-                print(f"{i}号浏览器登录完成")
-            except Exception as e:
-                print(f"{i}号浏览器登录/初始化失败: {e}")
-    else:
-        raise ValueError("method is not supported")
+    clear_invalid_cookies()
+    cookies_list = get_cookies()
 
-    if not selectors:
-        print("无可用session")
-        return
+    load_cookies(username, password, session_number - len(cookies_list))
+
+    clear_invalid_cookies()
+    cookies_list = get_cookies()
+    print(f"使用{len(cookies_list)}个浏览器")
+    
+    for idx, cookies in enumerate(cookies_list):
+        try:
+            sess = login_by_cookies(cookies)
+            selector = CourseSelector(sess)
+            selectors.append({'selector': selector, 'id': idx})
+            print(f"{idx}号浏览器登录完成")
+        except Exception as e:
+            print(f"{idx}号浏览器初始化失败: {e}")
 
     # Use first selector to resolve IDs
     main_selector = selectors[0]['selector']

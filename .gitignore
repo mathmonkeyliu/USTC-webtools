@@ -2,3 +2,4 @@ __pycache__/
 setting.py
 *.db
 *.pkl
+test*.py

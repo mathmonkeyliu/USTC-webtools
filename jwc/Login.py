@@ -58,8 +58,10 @@ def load_cookies(username: str, password: str, num: int) -> None:
 
 def login_by_selenium(username: str, password: str, save_cookies: bool = False) -> requests.Session | None:
     options = Options()
-
+    
+    # options.binary_location = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
     # options.add_argument(f"--user-data-dir=D:/Code/ChromeCache/default")
+
     
     name_path = "#nameInput"
     password_path = "#normalLoginForm > div.login-normal-item.passwordInput.ant-row > nz-input-group > input"
