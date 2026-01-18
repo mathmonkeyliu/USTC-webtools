@@ -12,7 +12,7 @@ def main():
     # 等待课程
     selector = CourseSelector(session)
     courses = ["AI1001A.02", "008185.02"]
-    selector.wait_courses(courses, time_interval=5)
+    selector.wait_courses(courses)
 
 if __name__ == '__main__':
     main()

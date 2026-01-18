@@ -234,18 +234,29 @@ class CourseSelector:
 
         return
 
-    def wait_courses(self, course_codes: list[str], time_interval: int = 5) -> None:
-        course_ids = self.get_class_info(course_codes, 'id')
-        limit_counts = self.get_class_info(course_codes, 'limitCount')
+    def wait_courses(self, course_codes: list[str], time_interval: int = 5, update_interval: int = 3600) -> None:
+        """
+        等待课程
+        :param course_codes: 课程代码列表，如 ['BIOL5121P.02', '008704.02']
+        :param time_interval: 等待时间间隔
+        :param update_interval: 更新时间间隔
+        """
+        def update():
+            course_ids = self.get_class_info(course_codes, 'id')
+            limit_counts = self.get_class_info(course_codes, 'limitCount')
 
-        for index, course_id in enumerate(course_ids):
-            if course_id is None:
-                print(f"课程 {course_codes[index]} 不存在")
-                course_codes.pop(index)
-                course_ids.pop(index)
-                limit_counts.pop(index)
-                continue
+            for index, course_id in enumerate(course_ids):
+                if course_id is None:
+                    print(f"课程 {course_codes[index]} 不存在")
+                    course_codes.pop(index)
+                    course_ids.pop(index)
+                    limit_counts.pop(index)
+                    continue
 
+            return course_ids, limit_counts
+
+        course_ids, limit_counts = update()
+        last_update = time.time()
         data = {'lessonIds[]': course_ids}
         while True:
             response = self.session.post(url=self._std_count_url, data=data)
@@ -262,6 +273,11 @@ class CourseSelector:
                 
             except Exception as e:
                 print(f"出现异常: {e}")
+
+            if time.time() - last_update > update_interval:
+                course_ids, limit_counts = update()
+                print(f"更新课程信息: {course_codes}")
+                last_update = time.time()
 
             time.sleep(time_interval)
 
